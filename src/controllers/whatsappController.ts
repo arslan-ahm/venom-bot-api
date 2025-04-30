@@ -1,11 +1,12 @@
 import { Whatsapp, type CreateConfig } from 'venom-bot';
 import { type SendRequestBody } from '../types';
+import type { Request, Response } from 'express';
 
 let client: Whatsapp | null = null;
 let clientReady: Promise<void>;
 
 const venomOptions = {
-  session: process.env.SESSION_NAME || 'techloset-onboarding',
+  session: process.env.SESSION_NAME || 'session-name',
   headless: false,
   devtools: false,
   debug: false,
@@ -34,17 +35,21 @@ export const initializeWhatsappClient = (): void => {
           console.log('✅ Venom Bot is ready.');
           resolve();
         })
-        .catch((error: any) => {
+        .catch((error) => {
           console.error('❌ Error starting Venom:', error);
-          reject(error);
+          if (error instanceof Error) {
+            reject(error);
+          }
+          return;
         });
     });
   });
 };
 
-// Controller for sending messages
-export const sendMessage = async (req: any, res: any): Promise<void> => {
-  const { to, message }: SendRequestBody = req.body;
+
+export const sendMessage = async (req: Request, res: Response): Promise<void> => {
+  const { to, type, message, file, filename, contact, location }: SendRequestBody = req.body;
+  // const { to, message }: SendRequestBody = req.body;
 
   if (!client) {
     try {
@@ -61,21 +66,63 @@ export const sendMessage = async (req: any, res: any): Promise<void> => {
   }
 
   try {
-    let jid = to;
-    if (!jid.startsWith('92') && jid.startsWith('0')) {
-      jid = '92' + jid.slice(1);
+    const recipients = Array.isArray(to) ? to : [to];
+    for (const recipient of recipients) {
+      let jid = recipient;
+      if (!jid.startsWith('92') && jid.startsWith('0')) {
+        jid = '92' + jid.slice(1);
+      }
+      jid = `${jid}@c.us`;
+      console.log('Sending to:', jid);
+
+      switch (type) {
+        case 'text':
+          if (!message) throw new Error('Message is required for text type');
+          await client.sendText(jid, message);
+          break;
+
+        case 'file':
+          if (!file) throw new Error('File data is required for file type');
+          const buffer = Buffer.from(file, 'base64');
+          const base64File = `data:application/octet-stream;base64,${buffer.toString('base64')}`;
+          await client.sendFile(jid, base64File, filename || 'attachment', message || '');
+          break;
+
+        case 'contact':
+          if (!contact || !contact.name || !contact.phone) {
+            throw new Error('Contact name and phone are required for contact type');
+          }
+          await client.sendContactVcard(jid, `${contact.phone}@c.us`, contact.name);
+          break;
+
+        case 'location':
+          if (!location || !location.latitude || !location.longitude) {
+            throw new Error('Latitude and longitude are required for location type');
+          }
+          await client.sendLocation(
+            jid,
+            location.latitude,
+            location.longitude,
+            location.description || ''
+          );
+          break;
+
+        default:
+          throw new Error('Invalid message type');
+      }
     }
-    jid = `${jid}@c.us`;
-    console.log('Sending message to:', jid);
-    await client.sendText(jid, message);
+
     res.send({ status: '✅ Message sent' });
-  } catch (err: any) {
+  } catch (err) {
     console.error('❌ Error sending message:', err);
-    res.status(500).send({ error: err.message || 'Failed to send message' });
+    if (err instanceof Error) {
+      res.status(500).send({ error: err.message || 'Failed to send message' });
+    }
+    return;
   }
 };
 
 // Controller for test endpoint
-export const testEndpoint = (req: any, res: any): void => {
+export const testEndpoint = (req: Request, res: Response): void => {
   res.status(200).send({ message: 'Hello from Venom API' });
 };
